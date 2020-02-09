@@ -7,9 +7,9 @@ module ActionDispatch::Routing
       additional_mutations = opts.fetch(:additional_mutations, {})
       additional_queries   = opts.fetch(:additional_queries, {})
 
-      if [skipped_operations, only_operations].all?(&:any?)
-        raise GraphqlDevise::Error, "Can't specify both `skip` and `only` options when mounting the route."
-      end
+      # if [skipped_operations, only_operations].all?(&:any?)
+      #   raise GraphqlDevise::Error, "Can't specify both `skip` and `only` options when mounting the route."
+      # end
 
       default_mutations = {
         login:               GraphqlDevise::Mutations::Login,
@@ -18,19 +18,27 @@ module ActionDispatch::Routing
         update_password:     GraphqlDevise::Mutations::UpdatePassword,
         send_password_reset: GraphqlDevise::Mutations::SendPasswordReset,
         resend_confirmation: GraphqlDevise::Mutations::ResendConfirmation
-      }.freeze
+      }#.freeze
       default_queries = {
         confirm_account:      GraphqlDevise::Resolvers::ConfirmAccount,
         check_password_token: GraphqlDevise::Resolvers::CheckPasswordToken
       }
-      supported_operations = default_mutations.keys + default_queries.keys
+      # supported_operations = default_mutations.keys + default_queries.keys
 
-      unless skipped_operations.all? { |skipped| supported_operations.include?(skipped) }
-        raise GraphqlDevise::Error, 'Trying to skip a non supported operation. Check for typos.'
-      end
-      unless only_operations.all? { |only| supported_operations.include?(only) }
-        raise GraphqlDevise::Error, 'One of the `only` operations is not supported. Check for typos.'
-      end
+      # unless skipped_operations.all? { |skipped| supported_operations.include?(skipped) }
+      #   raise GraphqlDevise::Error, 'Trying to skip a non supported operation. Check for typos.'
+      # end
+      # unless only_operations.all? { |only| supported_operations.include?(only) }
+      #   raise GraphqlDevise::Error, 'One of the `only` operations is not supported. Check for typos.'
+      # end
+
+      GraphqlDevise::OperationChecker.call(
+        mutations: default_mutations,
+        queries:   default_queries,
+        custom:    custom_operations,
+        only:      only_operations,
+        skipped:   skipped_operations
+      )
 
       path         = opts.fetch(:at, '/graphql_auth')
       mapping_name = resource.underscore.tr('/', '_').to_sym
@@ -42,29 +50,41 @@ module ActionDispatch::Routing
       )
 
       authenticatable_type = opts[:authenticatable_type] ||
-                             "Types::#{resource}Type".safe_constantize ||
-                             GraphqlDevise::Types::AuthenticatableType
+        "Types::#{resource}Type".safe_constantize ||
+        GraphqlDevise::Types::AuthenticatableType
 
-      used_mutations = if only_operations.present?
-        default_mutations.slice(*only_operations)
-      else
-        default_mutations.except(*skipped_operations)
-      end
-      used_mutations.each do |action, mutation|
-        used_mutation = if custom_operations[action].present?
-          custom_operations[action]
-        else
-          new_mutation = Class.new(mutation)
-          new_mutation.graphql_name("#{resource}#{action.to_s.camelize(:upper)}")
-          new_mutation.field(:authenticatable, authenticatable_type, null: true)
+      # used_mutations = if only_operations.present?
+      #   default_mutations.slice(*only_operations)
+      # else
+      #   default_mutations.except(*skipped_operations)
+      # end
+      # used_mutations.each do |action, mutation|
+      #   used_mutation = if custom_operations[action].present?
+      #     custom_operations[action]
+      #   else
+      #     new_mutation = Class.new(mutation)
+      #     new_mutation.graphql_name("#{resource}#{action.to_s.camelize(:upper)}")
+      #     new_mutation.field(:authenticatable, authenticatable_type, null: true)
 
-          new_mutation
-        end
-        used_mutation.instance_variable_set(:@resource_name, mapping_name)
+      #     new_mutation
+      #   end
+      #   used_mutation.instance_variable_set(:@resource_name, mapping_name)
 
-        GraphqlDevise::Types::MutationType.field("#{mapping_name}_#{action}", mutation: used_mutation)
-      end
-      additional_mutations.each do |action, mutation|
+      #   GraphqlDevise::Types::MutationType.field("#{mapping_name}_#{action}", mutation: used_mutation)
+      # end
+      used_mutations = GraphqlDevise::OperationSanitizer.call(
+        default: default_mutations,
+        custom:  custom_operations,
+        only:    only_operations,
+        skipped: skipped_operations
+      )
+      prepared_mutations = GraphqlDevise::MutationsPreparer.call(
+        resource:             resource,
+        mutations:            used_mutations,
+        authenticatable_type: authenticatable_type
+      )
+
+      (additional_mutations + prepared_mutations).each do |action, mutation|
         GraphqlDevise::Types::MutationType.field(action, mutation: mutation)
       end
 
